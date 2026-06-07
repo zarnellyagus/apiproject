@@ -1,0 +1,345 @@
+using Microsoft.Extensions.Logging;
+using SalesforcAPI.Interfaces;
+using SalesforcAPI.Models;
+using System.Globalization;
+using System.Xml;
+using System.Xml.Linq;
+
+namespace SalesforcAPI.Repositories
+{
+    public class AnticipatedEndowmentRepository : IAnticipatedEndowmentRepository
+    {
+        private readonly IRequestSoap _requestSoap;
+        private readonly ILogger<AnticipatedEndowmentRepository> _logger;
+
+        public AnticipatedEndowmentRepository(
+            IRequestSoap requestSoap,
+            ILogger<AnticipatedEndowmentRepository> logger)
+        {
+            _requestSoap = requestSoap;
+            _logger = logger;
+        }
+
+        public async Task<AnticipatedEndowmentResponse> GetAnticipatedEndowmentAsync(string policyId)
+        {
+            if (string.IsNullOrWhiteSpace(policyId))
+                throw new ArgumentException("PolicyID tidak boleh kosong.", nameof(policyId));
+
+            string url = "http://10.154.5.45:8093/TXLife/services/TXLife";
+
+            var soapNs = XNamespace.Get("http://schemas.xmlsoap.org/soap/envelope/");
+            var txNs = XNamespace.Get("http://schema/webservices.elink.solcorp.com");
+            var acordNs = XNamespace.Get("http://ACORD.org/Standards/Life/2");
+            var xsiNs = XNamespace.Get("http://www.w3.org/2001/XMLSchema-instance");
+            var xsdNs = XNamespace.Get("http://www.w3.org/2001/XMLSchema");
+            var schemaLocation = "http://ACORD.org/Standards/Life/2../xsd/TXLife2.9.00.xsd";
+
+            string responseState = string.Empty;
+            string responseStatec = string.Empty;
+            string responseStated = string.Empty;
+
+            try
+            {
+                var xmlEndw = new XElement(soapNs + "Envelope",
+                    new XAttribute(XNamespace.Xmlns + "soapenv", soapNs),
+                    new XAttribute(XNamespace.Xmlns + "web", txNs),
+                    new XElement(soapNs + "Header"),
+                    new XElement(soapNs + "Body",
+                        new XElement(acordNs + "TXLife",
+                            new XAttribute(XNamespace.Xmlns + "xsi", xsiNs),
+                            new XAttribute(XNamespace.Xmlns + "xsd", xsdNs),
+                            new XAttribute(xsiNs + "schemaLocation", schemaLocation),
+                            new XElement(acordNs + "SignOnCompany", "CP"),
+                            new XElement(acordNs + "UserAuthRequest",
+                                new XElement(acordNs + "UserLoginName", "fi80w"),
+                                new XElement(acordNs + "UserPswd",
+                                    new XElement(acordNs + "CryptType", "NONE"),
+                                    new XElement(acordNs + "Pswd", "fi80w")),
+                                new XElement(acordNs + "UserCoId", "CP")),
+                            new XElement(acordNs + "TXLifeRequest",
+                                new XElement(acordNs + "TransRefGUID", ""),
+                                new XElement(acordNs + "TransType", new XAttribute("tc", "InquiryAnticipatedEndowment")),
+                                new XElement(acordNs + "TransExeDate", ""),
+                                new XElement(acordNs + "TransExeTime", ""),
+                                new XElement(acordNs + "OLifE",
+                                    new XElement(acordNs + "InquiryAnticipatedEndowmentData",
+                                        new XElement(acordNs + "MirCommonFields",
+                                            new XElement(acordNs + "MirDvEffDt", "16APR2026"),
+                                            new XElement(acordNs + "MirCvgNum", "01"),
+                                            new XElement(acordNs + "MirPolPayoNum", "00001")),
+                                        new XElement(acordNs + "MirPolId",
+                                            new XElement(acordNs + "MirPolIdBase", policyId),
+                                            new XElement(acordNs + "MirPolIdSfx", ""))))))));
+
+                responseState = await _requestSoap.PostSOAPRequestAsync(url, xmlEndw.ToString());
+
+                var xmlCallCentre = new XElement(soapNs + "Envelope",
+                    new XAttribute(XNamespace.Xmlns + "soapenv", soapNs),
+                    new XAttribute(XNamespace.Xmlns + "web", txNs),
+                    new XElement(soapNs + "Header"),
+                    new XElement(soapNs + "Body",
+                        new XElement(acordNs + "TXLife",
+                            new XAttribute(XNamespace.Xmlns + "xsi", xsiNs),
+                            new XAttribute(XNamespace.Xmlns + "xsd", xsdNs),
+                            new XAttribute(xsiNs + "schemaLocation", schemaLocation),
+                            new XElement(acordNs + "SignOnCompany", "CP"),
+                            new XElement(acordNs + "UserAuthRequest",
+                                new XElement(acordNs + "UserLoginName", "fi80w"),
+                                new XElement(acordNs + "UserPswd",
+                                    new XElement(acordNs + "CryptType", "NONE"),
+                                    new XElement(acordNs + "Pswd", "fi80w")),
+                                new XElement(acordNs + "UserCoId", "CP")),
+                            new XElement(acordNs + "TXLifeRequest",
+                                new XElement(acordNs + "TransRefGUID", ""),
+                                new XElement(acordNs + "TransType", new XAttribute("tc", "CallCentreInquiry")),
+                                new XElement(acordNs + "TransExeDate", ""),
+                                new XElement(acordNs + "TransExeTime", ""),
+                                new XElement(acordNs + "OLifE",
+                                    new XElement(acordNs + "CallCentreInquiryData",
+                                        new XElement(acordNs + "MirPolId",
+                                            new XElement(acordNs + "MirPolIdBase", policyId),
+                                            new XElement(acordNs + "MirPolIdSfx", "")),
+                                        new XElement(acordNs + "MirCvgNum", ""),
+                                        new XElement(acordNs + "MirDvEffDt", ""))))))));
+
+                responseStatec = await _requestSoap.PostSOAPRequestAsync(url, xmlCallCentre.ToString());
+
+                var xmlContractualPayout = new XElement(soapNs + "Envelope",
+                    new XAttribute(XNamespace.Xmlns + "soapenv", soapNs),
+                    new XAttribute(XNamespace.Xmlns + "web", txNs),
+                    new XElement(soapNs + "Header"),
+                    new XElement(soapNs + "Body",
+                        new XElement(acordNs + "TXLife",
+                            new XAttribute(XNamespace.Xmlns + "xsi", xsiNs),
+                            new XAttribute(XNamespace.Xmlns + "xsd", xsdNs),
+                            new XAttribute(xsiNs + "schemaLocation", schemaLocation),
+                            new XElement(acordNs + "SignOnCompany", "CP"),
+                            new XElement(acordNs + "UserAuthRequest",
+                                new XElement(acordNs + "UserLoginName", "fi80w"),
+                                new XElement(acordNs + "UserPswd",
+                                    new XElement(acordNs + "CryptType", "NONE"),
+                                    new XElement(acordNs + "Pswd", "fi80w")),
+                                new XElement(acordNs + "UserCoId", "CP")),
+                            new XElement(acordNs + "TXLifeRequest",
+                                new XElement(acordNs + "TransRefGUID", ""),
+                                new XElement(acordNs + "TransType", new XAttribute("tc", "InquiryContractualPayouts")),
+                                new XElement(acordNs + "TransExeDate", ""),
+                                new XElement(acordNs + "TransExeTime", ""),
+                                new XElement(acordNs + "OLifE",
+                                    new XElement(acordNs + "InquiryContractualPayoutsData",
+                                        new XElement(acordNs + "MirCommonFields",
+                                            new XElement(acordNs + "MirCvgNum", ""),
+                                            new XElement(acordNs + "MirDvEffDt", ""),
+                                            new XElement(acordNs + "MirPolId",
+                                                new XElement(acordNs + "MirPolIdBase", policyId),
+                                                new XElement(acordNs + "MirPolIdSfx", ""))))))))));
+
+                responseStated = await _requestSoap.PostSOAPRequestAsync(url, xmlContractualPayout.ToString());
+
+                _logger.LogInformation(
+                    "[AnticipatedEndowment] SOAP success PolicyID={PolicyID}, EndowmentLength={EndowmentLength}, CallCentreLength={CallCentreLength}, ContractualPayoutsLength={ContractualPayoutsLength}",
+                    policyId,
+                    responseState?.Length ?? 0,
+                    responseStatec?.Length ?? 0,
+                    responseStated?.Length ?? 0);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[AnticipatedEndowment] SOAP request gagal PolicyID={PolicyID}", policyId);
+                throw;
+            }
+
+            try
+            {
+                var payoutDates = new List<PayoutDateInformation>();
+                var contractualInfo = new ContractualPayoutInformation { PolicyID = policyId };
+                var aeFundInfo = new AEFundInformation { PolicyID = policyId };
+
+                if (!string.IsNullOrWhiteSpace(responseState))
+                {
+                    var validationDoc = new XmlDocument();
+                    validationDoc.LoadXml(XDocument.Parse(responseState).ToString());
+
+                    var validationNs = new XmlNamespaceManager(validationDoc.NameTable);
+                    validationNs.AddNamespace("soap", "http://schemas.xmlsoap.org/soap/envelope/");
+                    validationNs.AddNamespace("ns", "http://ACORD.org/Standards/Life/2");
+
+                    if (ContainsPolicyNotFoundMessage(validationDoc, validationNs, policyId))
+                    {
+                        throw new KeyNotFoundException($"PolicyID {policyId} tidak ditemukan.");
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(responseStated))
+                {
+                    var xmlDoc = new XmlDocument();
+                    xmlDoc.LoadXml(XDocument.Parse(responseStated).ToString());
+
+                    var ns = new XmlNamespaceManager(xmlDoc.NameTable);
+                    ns.AddNamespace("soap", "http://schemas.xmlsoap.org/soap/envelope/");
+                    ns.AddNamespace("ns", "http://ACORD.org/Standards/Life/2");
+
+                    if (ContainsPolicyNotFoundMessage(xmlDoc, ns, policyId))
+                    {
+                        throw new KeyNotFoundException($"PolicyID {policyId} tidak ditemukan.");
+                    }
+
+                    var nodes = xmlDoc.SelectNodes("//ns:InquiryContractualPayoutsData", ns);
+                    int seq = 1;
+
+                    if (nodes != null)
+                    {
+                        foreach (XmlNode node in nodes)
+                        {
+                            string payoutDateText = node.SelectSingleNode("ns:MirDvXpctPayoDtG/ns:MirDvXpctPayoDtT", ns)?.InnerText ?? "";
+                            string payoutAmountText = node.SelectSingleNode("ns:MirDvXpctPayoAmtG/ns:MirDvXpctPayoAmtT", ns)?.InnerText ?? "";
+                            string payoutStatusText = node.SelectSingleNode("ns:MirCdiPayomthdCdG/ns:MirCdiPayomthdCdT", ns)?.InnerText ?? "";
+
+                            if (string.IsNullOrWhiteSpace(payoutDateText) &&
+                                string.IsNullOrWhiteSpace(payoutAmountText) &&
+                                string.IsNullOrWhiteSpace(payoutStatusText))
+                                continue;
+
+                            payoutDates.Add(new PayoutDateInformation
+                            {
+                                PolicyID = policyId,
+                                PayoutDate = ParseDate(payoutDateText),
+                                PayoutAmount = ParseDouble(payoutAmountText),
+                                PayoutStatus = payoutStatusText,
+                                SequenceNumber = seq++
+                            });
+                        }
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(responseState))
+                {
+                    var xmlDoc = new XmlDocument();
+                    xmlDoc.LoadXml(XDocument.Parse(responseState).ToString());
+
+                    var ns = new XmlNamespaceManager(xmlDoc.NameTable);
+                    ns.AddNamespace("soap", "http://schemas.xmlsoap.org/soap/envelope/");
+                    ns.AddNamespace("ns", "http://ACORD.org/Standards/Life/2");
+
+                    var endowmentNode = xmlDoc.SelectSingleNode("//ns:InquiryAnticipatedEndowmentData", ns);
+
+                    if (ContainsPolicyNotFoundMessage(xmlDoc, ns, policyId))
+                    {
+                        throw new KeyNotFoundException($"PolicyID {policyId} tidak ditemukan.");
+                    }
+
+                    if (endowmentNode != null)
+                    {
+                        contractualInfo = new ContractualPayoutInformation
+                        {
+                            PolicyID = policyId,
+                            PayoutMethod = endowmentNode.SelectSingleNode("ns:MirCdiPayomthdCdG/ns:MirCdiPayomthdCdT", ns)?.InnerText ?? "",
+                            PayoutNumber = ParseInt(endowmentNode.SelectSingleNode("ns:MirCommonFields/ns:MirPolPayoNum", ns)?.InnerText),
+                            NextPayoutDate = ParseDate(endowmentNode.SelectSingleNode("ns:MirCommonFields/ns:MirPolPayoNxtDt", ns)?.InnerText),
+                            LastPayoutDate = ParseDate(endowmentNode.SelectSingleNode("ns:MirCommonFields/ns:MirCdaEffDt", ns)?.InnerText),
+                            LastPayoutAmount = ParseDouble(endowmentNode.SelectSingleNode("ns:MirCommonFields/ns:MirLastPayoAmt", ns)?.InnerText),
+                            TotalPayoutAmount = ParseDouble(endowmentNode.SelectSingleNode("ns:MirCommonFields/ns:MirPolPayoAmt", ns)?.InnerText),
+                            IssueDate = ParseDate(endowmentNode.SelectSingleNode("ns:MirCommonFields/ns:MirPolPayoEffDt", ns)?.InnerText)
+                        };
+
+                        aeFundInfo = new AEFundInformation
+                        {
+                            PolicyID = policyId,
+                            AEFund = endowmentNode.SelectSingleNode("ns:MirValuotrFields/ns:MirPolAeAmt", ns)?.InnerText ?? "",
+                            AEFundInterest = endowmentNode.SelectSingleNode("ns:MirValuotrFields/ns:MirPolAeIntAmt", ns)?.InnerText ?? "",
+                            LastWithdrawalDate = ParseDate(endowmentNode.SelectSingleNode("ns:MirCommonFields/ns:MirLastAeWthdrDt", ns)?.InnerText),
+                            LoanBalance = ParseDouble(endowmentNode.SelectSingleNode("ns:MirValuInFields/ns:MirDvLoanRepayAmt", ns)?.InnerText),
+                            PlanName = endowmentNode.SelectSingleNode("ns:MirCommonFields/ns:MirDvFndDescTxt", ns)?.InnerText ?? "",
+                            LastWithdrawalAmount = ParseDouble(endowmentNode.SelectSingleNode("ns:MirCommonFields/ns:MirLastAeWthdrAmt", ns)?.InnerText)
+                        };
+                    }
+                    else
+                    {
+                        throw new KeyNotFoundException($"PolicyID {policyId} tidak ditemukan.");
+                    }
+                }
+                else
+                {
+                    throw new KeyNotFoundException($"PolicyID {policyId} tidak ditemukan.");
+                }
+
+                if (payoutDates.Count == 0)
+                {
+                    payoutDates.Add(new PayoutDateInformation
+                    {
+                        PolicyID = policyId,
+                        PayoutDate = null,
+                        PayoutAmount = 0,
+                        PayoutStatus = "",
+                        SequenceNumber = 0
+                    });
+                }
+
+                return new AnticipatedEndowmentResponse
+                {
+                    ContractualPayoutInfo = contractualInfo,
+                    PayoutDates = payoutDates,
+                    AEFundInfo = aeFundInfo
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[AnticipatedEndowment] Parse XML gagal PolicyID={PolicyID}", policyId);
+                throw;
+            }
+        }
+
+        private static bool ContainsPolicyNotFoundMessage(XmlDocument xmlDoc, XmlNamespaceManager ns, string policyId)
+        {
+            var messageNodes = xmlDoc.SelectNodes("//ns:MirUserMsgTxtG/ns:MirUserMsgTxtT", ns);
+            if (messageNodes == null || messageNodes.Count == 0)
+                return false;
+
+            foreach (XmlNode node in messageNodes)
+            {
+                var text = node?.InnerText?.Trim() ?? string.Empty;
+
+                if (string.IsNullOrWhiteSpace(text))
+                    continue;
+
+                if (text.Contains("DOES NOT EXIST", StringComparison.OrdinalIgnoreCase) &&
+                    text.Contains("POLICY", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                if (!string.IsNullOrWhiteSpace(policyId) &&
+                    text.Contains(policyId, StringComparison.OrdinalIgnoreCase) &&
+                    text.Contains("DOES NOT EXIST", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static DateTime? ParseDate(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return null;
+
+            string[] formats = { "ddMMyyyy", "dd/MM/yyyy", "yyyy-MM-dd", "ddMMMyyyy" };
+            if (DateTime.TryParseExact(value, formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
+                return dt;
+
+            return DateTime.TryParse(value, out var fallback) ? fallback : null;
+        }
+
+        private static double ParseDouble(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return 0;
+            return double.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? d : 0;
+        }
+
+        private static int ParseInt(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return 0;
+            return int.TryParse(value, out var i) ? i : 0;
+        }
+    }
+}
