@@ -1,0 +1,473 @@
+using Dapper;
+using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using SalesforcAPI.Interfaces;
+using SalesforcAPI.Models;
+using System.Globalization;
+using System.Xml;
+using System.Xml.Linq;
+
+namespace SalesforcAPI.Repositories
+{
+    public class BenefitInformationRepository : IBenefitInformationRepository
+    {
+        private readonly string _connectionString;
+        private readonly ILogger<BenefitInformationRepository> _logger;
+        private readonly IRequestSoap _requestSoap;
+
+        public BenefitInformationRepository(
+            IConfiguration configuration,
+            ILogger<BenefitInformationRepository> logger,
+            IRequestSoap requestSoap)
+        {
+            _connectionString = configuration.GetConnectionString("NDIBOARD33")
+                ?? throw new ArgumentNullException(nameof(configuration), "Connection string NDIBOARD33 not found.");
+            _logger = logger;
+            _requestSoap = requestSoap;
+        }
+
+        public async Task<BenefitInformationResponse> GetBenefitInformationAsync(string policyId)
+        {
+            if (string.IsNullOrWhiteSpace(policyId))
+                throw new ArgumentException("PolicyID tidak boleh kosong.", nameof(policyId));
+
+            var results = new List<CoverageInfo>();
+            var resultsbf = new List<LifeBenefitInfo>();
+            var resultsinc = new List<DisabilityInc>();
+
+            await using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            try
+            {
+                var sqlResult = await connection.QueryAsync<CoverageInfo>(
+                    BuildCoverageQuery(),
+                    new { PolicyID = policyId },
+                    commandTimeout: 60);
+
+                results = sqlResult?.ToList() ?? new List<CoverageInfo>();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[BenefitInformation] Gagal query SQL PolicyID={PolicyID}", policyId);
+            }
+
+            try
+            {
+                string datenow = DateTime.Today.ToString("ddMMMyyyy", CultureInfo.InvariantCulture);
+                string url = "http://10.154.5.45:8093/TXLife/services/TXLife";
+
+                var soapNs = XNamespace.Get("http://schemas.xmlsoap.org/soap/envelope/");
+                var txLifeNs = XNamespace.Get("http://schema/webservices.elink.solcorp.com");
+                var acordNs = XNamespace.Get("http://ACORD.org/Standards/Life/2");
+                var xsiNs = XNamespace.Get("http://www.w3.org/2001/XMLSchema-instance");
+                var xsdNs = XNamespace.Get("http://www.w3.org/2001/XMLSchema");
+                var schemaLocation = "http://ACORD.org/Standards/Life/2../xsd/TXLife2.9.00.xsd";
+
+                var xml = new XElement(soapNs + "Envelope",
+                    new XAttribute(XNamespace.Xmlns + "soapenv", soapNs),
+                    new XAttribute(XNamespace.Xmlns + "web", txLifeNs),
+                    new XElement(soapNs + "Header"),
+                    new XElement(soapNs + "Body",
+                        new XElement(acordNs + "TXLife",
+                            new XAttribute(XNamespace.Xmlns + "xsi", xsiNs),
+                            new XAttribute(XNamespace.Xmlns + "xsd", xsdNs),
+                            new XAttribute(XNamespace.Xmlns + "schemaLocation", schemaLocation),
+                            new XElement(acordNs + "SignOnCompany", "CP"),
+                            new XElement(acordNs + "UserAuthRequest",
+                                new XElement(acordNs + "UserLoginName", "fi80w"),
+                                new XElement(acordNs + "UserPswd",
+                                    new XElement(acordNs + "CryptType", "NONE"),
+                                    new XElement(acordNs + "Pswd", "fi80w")),
+                                new XElement(acordNs + "UserCoId", "CP")),
+                            new XElement("TXLifeRequest",
+                                new XElement("TransRefGUID", Guid.NewGuid().ToString()),
+                                new XElement("TransType", new XAttribute("tc", "CallCentreInquiry"), ""),
+                                new XElement("TransExeDate", datenow),
+                                new XElement("TransExeTime", DateTime.Now.ToString("HHmmss", CultureInfo.InvariantCulture)),
+                                new XElement("OLiFE",
+                                    new XElement("CallCentreInquiryData",
+                                        new XElement("MirPolId",
+                                            new XElement("MirPolIdBase", policyId),
+                                            new XElement("MirPolIdSfx", "")),
+                                        new XElement("MirCvgNum", ""),
+                                        new XElement("MirDvEffDt", "")))))));
+
+                string responseState = await _requestSoap.PostSOAPRequestAsync(url, xml.ToString());
+
+                var xmlDoc = new XmlDocument();
+                xmlDoc.LoadXml(XDocument.Parse(responseState).ToString());
+
+                var ns = CreateNamespaceManager(xmlDoc);
+
+                if (ContainsPolicyNotFoundMessage(xmlDoc, ns, policyId))
+                    throw new KeyNotFoundException($"PolicyID {policyId} tidak ditemukan.");
+
+                XmlNodeList? callCentreNodes = xmlDoc.SelectNodes("//ns:CallCentreInquiryData", ns);
+
+                if (callCentreNodes != null)
+                {
+                    foreach (XmlNode node in callCentreNodes)
+                    {
+                        XmlNodeList? covnum = node.SelectNodes("ns:MirCommonFields/ns:MirCvgNumG/ns:MirCvgNumT", ns);
+
+                        XmlNodeList? accdbf = node.SelectNodes("ns:MirPremcovFields/ns:MirCvgAdPremAntG/ns:MirCvgAdPremAntT", ns);
+                        XmlNodeList? adbrt = node.SelectNodes("ns:MirPremcovFields/ns:MirCvgAdMultFctG/ns:MirCvgAdMultFctT", ns);
+                        XmlNodeList? wpremium = node.SelectNodes("ns:MirPremcovFields/ns:MirCvgWpPremAmtG/ns:MirCvgWpPremAmtT", ns);
+                        XmlNodeList? wmulti = node.SelectNodes("ns:MirPremcovFields/ns:MirCvgWpMultFctG/ns:MirCvgWpMultFctT", ns);
+
+                        int counts = MinCount(covnum, accdbf, adbrt, wpremium, wmulti);
+                        for (int i = 0; i < counts; i++)
+                        {
+                            string rq = covnum?[i]?.InnerText?.Trim() ?? "";
+                            if (string.IsNullOrWhiteSpace(rq) || rq == "*")
+                                continue;
+
+                            resultsbf.Add(new LifeBenefitInfo
+                            {
+                                CoverageNumber = ParseInt(rq),
+                                AccidentalDeathBenefitPremium = accdbf?[i]?.InnerText?.Trim() ?? "",
+                                ADBRatingMultiplier = adbrt?[i]?.InnerText?.Trim() ?? "",
+                                WaiverOfPremiumBenefitPremium = wpremium?[i]?.InnerText?.Trim() ?? "",
+                                WaiverOfPremiumMultiplier = wmulti?[i]?.InnerText?.Trim() ?? ""
+                            });
+                        }
+
+                        XmlNodeList? liftmacc = node.SelectNodes("ns:MirPremcovFields/ns:MirCvgLtaPremAntG/ns:MirCvgLtaPremAntT", ns);
+                        XmlNodeList? lifetmbnf = node.SelectNodes("ns:MirPremcovFields/ns:MirCvgLtbPremAntG/ns:MirCvgLtbPremAntT", ns);
+                        XmlNodeList? pard = node.SelectNodes("ns:MirPremcovFields/ns:MirPdisabPremAntG/ns:MirPdisabPremAntT", ns);
+                        XmlNodeList? costlvad = node.SelectNodes("ns:MirPremcovFields/ns:MirCvgColaPremAntG/ns:MirCvgColaPremAntT", ns);
+                        XmlNodeList? ownocp = node.SelectNodes("ns:MirPremcovFields/ns:MirOwnOccpPremAntG/ns:MirOwnOccpPremAntT", ns);
+                        XmlNodeList? redela = node.SelectNodes("ns:MirPremcovFields/ns:MirRedcEpPremAntG/ns:MirRedcEpPremAntT", ns);
+
+                        int countt = MinCount(covnum, liftmacc, lifetmbnf, pard, costlvad, ownocp, redela);
+                        for (int i = 0; i < countt; i++)
+                        {
+                            string rq = covnum?[i]?.InnerText?.Trim() ?? "";
+                            if (string.IsNullOrWhiteSpace(rq) || rq == "*")
+                                continue;
+
+                            resultsinc.Add(new DisabilityInc
+                            {
+                                CoverageNumber = ParseInt(rq),
+                                LifetimeAccident = liftmacc?[i]?.InnerText?.Trim() ?? "",
+                                LifetimeBenefits = lifetmbnf?[i]?.InnerText?.Trim() ?? "",
+                                PartialDisability = pard?[i]?.InnerText?.Trim() ?? "",
+                                CostOfLivingAdjustments = costlvad?[i]?.InnerText?.Trim() ?? "",
+                                OwnOccupationDefinitionOfDisability = ownocp?[i]?.InnerText?.Trim() ?? "",
+                                ReducedEliminationPeriodInEventOfHospitalization = redela?[i]?.InnerText?.Trim() ?? ""
+                            });
+                        }
+                    }
+                }
+            }
+            catch (KeyNotFoundException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[BenefitInformation] Gagal call/parse SOAP PolicyID={PolicyID}", policyId);
+                throw;
+            }
+
+            if (results.Count == 0)
+                results.Add(BuildBlankCoverage(policyId));
+
+            if (resultsbf.Count == 0)
+                resultsbf.Add(BuildBlankLifeBenefit());
+
+            if (resultsinc.Count == 0)
+                resultsinc.Add(BuildBlankDisability());
+
+            return new BenefitInformationResponse
+            {
+                CoverageInformation = results,
+                LifeBenefitInformation = resultsbf,
+                DisabilityIncome = resultsinc
+            };
+        }
+
+        private static XmlNamespaceManager CreateNamespaceManager(XmlDocument xmlDoc)
+        {
+            var ns = new XmlNamespaceManager(xmlDoc.NameTable);
+            ns.AddNamespace("soap", "http://schemas.xmlsoap.org/soap/envelope/");
+            ns.AddNamespace("ns", "http://ACORD.org/Standards/Life/2");
+            return ns;
+        }
+
+        private static bool ContainsPolicyNotFoundMessage(XmlDocument xmlDoc, XmlNamespaceManager ns, string policyId)
+        {
+            var messageNodes = xmlDoc.SelectNodes("//ns:MirUserMsgTxtG/ns:MirUserMsgTxtT", ns);
+            if (messageNodes == null || messageNodes.Count == 0)
+                return false;
+
+            foreach (XmlNode node in messageNodes)
+            {
+                var text = node?.InnerText?.Trim() ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(text))
+                    continue;
+
+                if (text.Contains("DOES NOT EXIST", StringComparison.OrdinalIgnoreCase) &&
+                    text.Contains("POLICY", StringComparison.OrdinalIgnoreCase))
+                    return true;
+
+                if (!string.IsNullOrWhiteSpace(policyId) &&
+                    text.Contains(policyId, StringComparison.OrdinalIgnoreCase) &&
+                    text.Contains("DOES NOT EXIST", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static string BuildCoverageQuery() => @"
+SELECT
+    PC.POL_ID AS PolicyId,
+    ISNULL(DC.CVG_NUM, 0) AS CoverageNumber,
+    ISNULL(DC.PLAN_ID, '') AS TypeofPlan,
+    ISNULL(DC.CVG_FACE_AMT, 0) AS FaceAmount,
+    ISNULL(DC.CVG_ISS_EFF_DT, '1900-01-01') AS IssueDate,
+    ISNULL(CONCAT(CN.CLI_GIV_NM, ' ', ISNULL(CN.CLI_MID_NM + ' ', ''), CN.CLI_SUR_NM), '') AS InsuredsName,
+    ISNULL(CAST(DC.CVG_RT_AGE AS VARCHAR(10)), '') AS RateAge,
+    ISNULL(DC.CVG_CSTAT_CD, '') AS CoverageStatus,
+    ISNULL(DC.CVG_MAT_XPRY_DT, '1900-01-01') AS CoverageMaturityExpiryDate,
+    ISNULL(DC.CVG_SEX_CD, '') AS Gander
+FROM DWA_POLICY_CLIENT PC WITH (NOLOCK)
+LEFT JOIN DWM_COVERAGE DC WITH (NOLOCK) ON DC.POL_ID = PC.POL_ID
+LEFT JOIN DWA_CLIENT_NAME CN WITH (NOLOCK) ON CN.CLI_ID = PC.CLI_ID
+WHERE PC.POL_ID = @PolicyID
+OPTION (MAXDOP 2);";
+
+        private static CoverageInfo BuildBlankCoverage(string policyId) =>
+            new CoverageInfo
+            {
+                PolicyId = policyId,
+                CoverageNumber = 0,
+                TypeofPlan = "",
+                FaceAmount = 0,
+                IssueDate = new DateTime(1900, 1, 1),
+                InsuredsName = "",
+                RateAge = "",
+                CoverageStatus = "",
+                CoverageMaturityExpiryDate = new DateTime(1900, 1, 1),
+                Gander = ""
+            };
+
+        private static LifeBenefitInfo BuildBlankLifeBenefit() =>
+            new LifeBenefitInfo
+            {
+                CoverageNumber = 0,
+                AccidentalDeathBenefitPremium = "",
+                ADBRatingMultiplier = "",
+                WaiverOfPremiumBenefitPremium = "",
+                WaiverOfPremiumMultiplier = ""
+            };
+
+        private static DisabilityInc BuildBlankDisability() =>
+            new DisabilityInc
+            {
+                CoverageNumber = 0,
+                LifetimeAccident = "",
+                LifetimeBenefits = "",
+                PartialDisability = "",
+                CostOfLivingAdjustments = "",
+                OwnOccupationDefinitionOfDisability = "",
+                ReducedEliminationPeriodInEventOfHospitalization = ""
+            };
+
+        private static int ParseInt(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return 0;
+            return int.TryParse(value, out var i) ? i : 0;
+        }
+
+        private static int MinCount(params XmlNodeList?[] lists)
+        {
+            var counts = lists.Where(x => x != null).Select(x => x!.Count).ToList();
+            return counts.Count == 0 ? 0 : counts.Min();
+        }
+    }
+}
+
+
+using Microsoft.AspNetCore.Mvc;
+using SalesforcAPI.Interfaces;
+using SalesforcAPI.Models;
+using System.Xml;
+
+namespace SalesForcAPI.Controllers
+{
+    [Route("api/[controller]")]
+    [ApiController]
+    public class BenefitInformationController : ControllerBase
+    {
+        private readonly IBenefitInformationRepository _repository;
+        private readonly ILogger<BenefitInformationController> _logger;
+
+        public BenefitInformationController(
+            IBenefitInformationRepository repository,
+            ILogger<BenefitInformationController> logger)
+        {
+            _repository = repository;
+            _logger = logger;
+        }
+
+        [HttpPost]
+        [ProducesResponseType(typeof(BenefitInformationResponse), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status404NotFound)]
+        [ProducesResponseType(typeof(ApiErrorResponse), StatusCodes.Status500InternalServerError)]
+        public async Task<ActionResult<BenefitInformationResponse>> GetBenefitInformationAsync(
+            [FromBody] BenefitInformationRequest request)
+        {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(new ApiErrorResponse
+                {
+                    Success = false,
+                    StatusCode = 400,
+                    Message = "Request tidak valid.",
+                    Detail = string.Join("; ", ModelState.Values
+                        .SelectMany(v => v.Errors)
+                        .Select(e => e.ErrorMessage)),
+                    Data = BuildEmptyResponse(request?.PolicyID ?? string.Empty)
+                });
+            }
+
+            try
+            {
+                var response = await _repository.GetBenefitInformationAsync(request.PolicyID);
+                return Ok(response);
+            }
+            catch (ArgumentException ex)
+            {
+                _logger.LogWarning(ex, "[BenefitInformation] Argument invalid PolicyID={PolicyID}", request.PolicyID);
+                return BadRequest(new ApiErrorResponse
+                {
+                    Success = false,
+                    StatusCode = 400,
+                    Message = "Parameter tidak valid.",
+                    Detail = ex.Message,
+                    Data = BuildEmptyResponse(request.PolicyID)
+                });
+            }
+            catch (KeyNotFoundException ex)
+            {
+                _logger.LogWarning(ex, "[BenefitInformation] Policy tidak ditemukan PolicyID={PolicyID}", request.PolicyID);
+                return StatusCode(StatusCodes.Status404NotFound, new ApiErrorResponse
+                {
+                    Success = false,
+                    StatusCode = 404,
+                    Message = "Policy tidak ditemukan.",
+                    Detail = ex.Message,
+                    Data = BuildEmptyResponse(request.PolicyID)
+                });
+            }
+            catch (XmlException ex)
+            {
+                _logger.LogError(ex, "[BenefitInformation] XML error PolicyID={PolicyID}", request.PolicyID);
+                return StatusCode(StatusCodes.Status500InternalServerError, new ApiErrorResponse
+                {
+                    Success = false,
+                    StatusCode = 500,
+                    Message = "Gagal memproses response XML dari SOAP service.",
+                    Detail = ex.Message,
+                    Data = BuildEmptyResponse(request.PolicyID)
+                });
+            }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogError(ex, "[BenefitInformation] HTTP error PolicyID={PolicyID}", request.PolicyID);
+                return StatusCode(StatusCodes.Status500InternalServerError, new ApiErrorResponse
+                {
+                    Success = false,
+                    StatusCode = 500,
+                    Message = "Service Unavailable.",
+                    Detail = ex.Message,
+                    Data = BuildEmptyResponse(request.PolicyID)
+                });
+            }
+            catch (TaskCanceledException ex)
+            {
+                _logger.LogError(ex, "[BenefitInformation] Timeout PolicyID={PolicyID}", request.PolicyID);
+                return StatusCode(StatusCodes.Status500InternalServerError, new ApiErrorResponse
+                {
+                    Success = false,
+                    StatusCode = 500,
+                    Message = "Request Timeout.",
+                    Detail = "Koneksi ke TXLife melebihi batas waktu.",
+                    Data = BuildEmptyResponse(request.PolicyID)
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[BenefitInformation] Unhandled error PolicyID={PolicyID}", request.PolicyID);
+                return StatusCode(StatusCodes.Status500InternalServerError, new ApiErrorResponse
+                {
+                    Success = false,
+                    StatusCode = 500,
+                    Message = "Terjadi kesalahan internal.",
+                    Detail = ex.Message,
+                    Data = BuildEmptyResponse(request.PolicyID)
+                });
+            }
+        }
+
+        private static BenefitInformationResponse BuildEmptyResponse(string policyId) =>
+            new BenefitInformationResponse
+            {
+                CoverageInformation = new List<CoverageInfo>
+                {
+                    new CoverageInfo
+                    {
+                        PolicyId = policyId,
+                        CoverageNumber = 0,
+                        TypeofPlan = "",
+                        FaceAmount = 0,
+                        IssueDate = new DateTime(1900, 1, 1),
+                        InsuredsName = "",
+                        RateAge = "",
+                        CoverageStatus = "",
+                        CoverageMaturityExpiryDate = new DateTime(1900, 1, 1),
+                        Gander = ""
+                    }
+                },
+                LifeBenefitInformation = new List<LifeBenefitInfo>
+                {
+                    new LifeBenefitInfo
+                    {
+                        CoverageNumber = 0,
+                        AccidentalDeathBenefitPremium = "",
+                        ADBRatingMultiplier = "",
+                        WaiverOfPremiumBenefitPremium = "",
+                        WaiverOfPremiumMultiplier = ""
+                    }
+                },
+                DisabilityIncome = new List<DisabilityInc>
+                {
+                    new DisabilityInc
+                    {
+                        CoverageNumber = 0,
+                        LifetimeAccident = "",
+                        LifetimeBenefits = "",
+                        PartialDisability = "",
+                        CostOfLivingAdjustments = "",
+                        OwnOccupationDefinitionOfDisability = "",
+                        ReducedEliminationPeriodInEventOfHospitalization = ""
+                    }
+                }
+            };
+    }
+}
+
+
+public class ApiErrorResponse
+{
+    public bool Success { get; set; } = false;
+    public int StatusCode { get; set; }
+    public string Message { get; set; } = string.Empty;
+    public string Detail { get; set; } = string.Empty;
+    public object? Data { get; set; }
+}
