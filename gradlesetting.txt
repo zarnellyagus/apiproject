@@ -1,0 +1,25 @@
+pluginManagement {
+    repositories {
+        mavenCentral()          // ← ini yang missing!
+        gradlePluginPortal()    // ← ini juga penting
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        mavenCentral()
+    }
+}
+
+rootProject.name = 'databackbone'
+
+
+Langkah-Langkah Lengkap
+Edit settings.gradle seperti di atas
+
+Hapus cache Gradle — buka terminal di folder project, jalankan:
+
+text
+gradlew.bat clean --refresh-dependencies
+Sync ulang di IntelliJ — klik kanan build.gradle → "Reload Gradle Project" atau klik tombol 🔄 di panel Gradle
