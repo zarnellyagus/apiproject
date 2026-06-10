@@ -1,0 +1,12 @@
+mkdir src\main\java\com\databackbone\api\config
+mkdir src\main\java\com\databackbone\api\controller
+mkdir src\main\java\com\databackbone\api\exception
+mkdir src\main\resources
+mkdir src\test\java\com\databackbone\api
+
+type nul > src\main\java\com\databackbone\api\DataBackboneApplication.java
+type nul > src\main\java\com\databackbone\api\config\DatabaseConfig.java
+type nul > src\main\java\com\databackbone\api\controller\HealthController.java
+type nul > src\main\java\com\databackbone\api\exception\GlobalExceptionHandler.java
+type nul > src\main\resources\application.properties
+type nul > src\test\java\com\databackbone\api\DataBackboneApplicationTests.java
